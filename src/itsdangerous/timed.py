@@ -48,7 +48,12 @@ class TimestampSigner(Signer):
         timestamp = base64_encode(int_to_bytes(self.get_timestamp()))
         sep = want_bytes(self.sep)
         value = value + sep + timestamp
-        return value + sep + self.get_signature(value)
+        sig = self.get_signature(value)
+
+        if self.key_ids is not None:
+            return value + sep + self.key_ids[-1] + sep + sig
+
+        return value + sep + sig
 
     # Ignore overlapping signatures check, return_timestamp is the only
     # parameter that affects the return type.

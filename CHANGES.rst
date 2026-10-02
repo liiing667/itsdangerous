@@ -5,6 +5,13 @@ Unreleased
 
 -   Drop support for Python 3.8 and 3.9.
 -   Remove previously deprecated code.
+-   The ``Signer`` class supports a ``key_ids`` argument, one identifier per
+    secret key. New signatures include the identifier of the key used to sign
+    them, and unsigning selects that key directly instead of trying each key.
+    Signatures without an identifier still fall back to trying every key. Use
+    the new ``Signer.migrate`` and ``Serializer.migrate`` methods to re-sign
+    existing values with the current key and identifier. ``key_ids`` can be
+    passed through ``Serializer`` via ``signer_kwargs``. :issue:`410`
 
 
 Version 2.2.0

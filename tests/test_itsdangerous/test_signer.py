@@ -107,3 +107,96 @@ def test_abstract_algorithm():
 
     with pytest.raises(NotImplementedError):
         alg.get_signature(b"a", b"b")
+
+
+class TestKeyIds:
+    @pytest.fixture()
+    def signer(self):
+        return Signer(["old-key", "new-key"], key_ids=["1", "2"])
+
+    def test_sign_includes_key_id(self, signer):
+        signed = signer.sign("my string")
+        assert signed.rsplit(b".", 2)[1] == b"2"
+        assert signer.unsign(signed) == b"my string"
+        assert signer.validate(signed)
+
+    def test_no_key_ids_unchanged(self):
+        signer = Signer(["old-key", "new-key"])
+        signed = signer.sign("my string")
+        assert signed == b"my string." + signed.rsplit(b".", 1)[1]
+        assert signer.unsign(signed) == b"my string"
+
+    def test_legacy_value_fallback(self, signer):
+        legacy = Signer(["old-key", "new-key"])
+        signed = legacy.sign("my string")
+        assert signer.unsign(signed) == b"my string"
+        assert signer.validate(signed)
+
+    def test_legacy_value_signed_with_old_key(self, signer):
+        legacy = Signer("old-key")
+        signed = legacy.sign("my string")
+        assert signer.unsign(signed) == b"my string"
+
+    def test_legacy_value_ending_with_key_id(self, signer):
+        # A legacy value that coincidentally ends with the separator
+        # and a valid key id must still unsign to the full value.
+        legacy = Signer("old-key")
+        signed = legacy.sign("value.1")
+        assert signer.unsign(signed) == b"value.1"
+
+    def test_wrong_key_id(self, signer):
+        signed = signer.sign("my string")
+        changed = signed.replace(b".2.", b".1.")
+        assert not signer.validate(changed)
+
+        with pytest.raises(BadSignature) as exc_info:
+            signer.unsign(changed)
+
+        assert exc_info.value.payload == b"my string"
+
+    def test_unknown_key_id(self, signer):
+        signed = signer.sign("my string")
+        changed = signed.replace(b".2.", b".3.")
+        assert not signer.validate(changed)
+
+        with pytest.raises(BadSignature):
+            signer.unsign(changed)
+
+    def test_fast_path_selects_matching_key(self):
+        # The newest key signs, and unsigning selects it by id even
+        # though the oldest key is tried first in the legacy path.
+        signer = Signer(["a", "b"], key_ids=["ka", "kb"])
+        signed = signer.sign("value")
+        assert signer.unsign(signed) == b"value"
+
+        other = Signer(["b", "a"], key_ids=["kb", "ka"])
+        assert other.unsign(signed) == b"value"
+
+    def test_migrate(self, signer):
+        legacy = Signer("old-key")
+        old_signed = legacy.sign("my string")
+        new_signed = signer.migrate(old_signed)
+        assert new_signed.rsplit(b".", 2)[1] == b"2"
+        assert signer.unsign(new_signed) == b"my string"
+
+    def test_migrate_already_migrated(self, signer):
+        signed = signer.sign("my string")
+        assert signer.unsign(signer.migrate(signed)) == b"my string"
+
+    def test_migrate_invalid(self, signer):
+        with pytest.raises(BadSignature):
+            signer.migrate(b"value.bad-sig")
+
+    @pytest.mark.parametrize(
+        "key_ids",
+        (
+            ["1"],
+            ["1", "1"],
+            ["1", ""],
+            ["1", "2.0"],
+        ),
+        ids=("length", "duplicate", "empty", "contains-sep"),
+    )
+    def test_invalid_key_ids(self, key_ids):
+        with pytest.raises(ValueError):
+            Signer(["old-key", "new-key"], key_ids=key_ids)

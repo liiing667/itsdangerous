@@ -22,3 +22,18 @@ class TestURLSafeTimedSerializer(TestURLSafeSerializer, TestTimedSerializer):
     @pytest.fixture()
     def serializer_factory(self):
         return partial(URLSafeTimedSerializer, secret_key="secret-key")
+
+
+@pytest.mark.parametrize("cls", (URLSafeSerializer, URLSafeTimedSerializer))
+def test_key_ids_passthrough(cls):
+    serializer = cls(["old-key", "new-key"], signer_kwargs={"key_ids": ["1", "2"]})
+    signed = serializer.dumps({"id": 42})
+    assert signed.rsplit(".", 2)[1] == "2"
+    assert serializer.loads(signed) == {"id": 42}
+
+    legacy = cls(["old-key", "new-key"])
+    assert serializer.loads(legacy.dumps({"id": 42})) == {"id": 42}
+
+    migrated = serializer.migrate(legacy.dumps({"id": 42}))
+    assert migrated.rsplit(".", 2)[1] == "2"
+    assert serializer.loads(migrated) == {"id": 42}

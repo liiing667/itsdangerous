@@ -98,6 +98,17 @@ class Signer:
     :param algorithm: A :class:`SigningAlgorithm` instance to use
         instead of building a default :class:`HMACAlgorithm` with the
         ``digest_method``.
+    :param key_ids: An optional list of key identifiers, one for each
+        item in ``secret_key``. If given, signed values include the
+        identifier of the key that signed them, and unsigning selects
+        the matching key directly instead of trying each key in order.
+        Values signed without an identifier remain valid and fall back
+        to trying each key. Identifiers must be unique, non-empty, and
+        must not contain the separator. They are placed in the signed
+        value verbatim, so prefer URL-safe values.
+
+    .. versionadded:: 2.3
+        Added the ``key_ids`` parameter and :meth:`migrate`.
 
     .. versionchanged:: 2.0
         Added support for key rotation by passing a list to
@@ -134,6 +145,7 @@ class Signer:
         key_derivation: str | None = None,
         digest_method: t.Any | None = None,
         algorithm: SigningAlgorithm | None = None,
+        key_ids: cabc.Iterable[str] | cabc.Iterable[bytes] | None = None,
     ):
         #: The list of secret keys to try for verifying signatures, from
         #: oldest to newest. The newest (last) key is used for signing.
@@ -149,6 +161,34 @@ class Signer:
                 " contained in the signature itself. ASCII letters,"
                 " digits, and '-_=' must not be used."
             )
+
+        if key_ids is not None:
+            key_ids = [want_bytes(key_id) for key_id in key_ids]
+
+            if len(key_ids) != len(self.secret_keys):
+                raise ValueError(
+                    "The number of key IDs must match the number of secret keys."
+                )
+
+            if len(set(key_ids)) != len(key_ids):
+                raise ValueError("Key IDs must be unique.")
+
+            for key_id in key_ids:
+                if not key_id:
+                    raise ValueError("Key IDs must not be empty.")
+
+                if self.sep in key_id:
+                    raise ValueError("Key IDs must not contain the separator.")
+
+        #: The list of key identifiers corresponding to
+        #: :attr:`secret_keys`, or ``None`` if key identifiers are not
+        #: used. The identifier of the newest (last) key is included in
+        #: signed values.
+        self.key_ids: list[bytes] | None = key_ids
+        self._key_id_to_key: dict[bytes, bytes] = {}
+
+        if key_ids is not None:
+            self._key_id_to_key = dict(zip(key_ids, self.secret_keys, strict=True))
 
         if salt is not None:
             salt = want_bytes(salt)
@@ -222,7 +262,26 @@ class Signer:
     def sign(self, value: str | bytes) -> bytes:
         """Signs the given string."""
         value = want_bytes(value)
-        return value + self.sep + self.get_signature(value)
+        sig = self.get_signature(value)
+
+        if self.key_ids is not None:
+            return value + self.sep + self.key_ids[-1] + self.sep + sig
+
+        return value + self.sep + sig
+
+    def _verify_signature_with_key(
+        self, value: bytes, sig: str | bytes, secret_key: bytes
+    ) -> bool:
+        """Verifies the signature for the given value against one
+        specific secret key.
+        """
+        try:
+            sig_bytes = base64_decode(sig)
+        except Exception:
+            return False
+
+        key = self.derive_key(secret_key)
+        return self.algorithm.verify_signature(key, value, sig_bytes)
 
     def verify_signature(self, value: str | bytes, sig: str | bytes) -> bool:
         """Verifies the signature for the given value."""
@@ -250,10 +309,42 @@ class Signer:
 
         value, sig = signed_value.rsplit(self.sep, 1)
 
+        if self.key_ids is not None and self.sep in value:
+            # The value may carry a key identifier in its last segment,
+            # allowing the matching key to be selected directly.
+            key_value, key_id = value.rsplit(self.sep, 1)
+            secret_key = self._key_id_to_key.get(key_id)
+
+            if secret_key is not None:
+                if self._verify_signature_with_key(key_value, sig, secret_key):
+                    return key_value
+
+                # A legacy value might coincidentally end with the
+                # separator and a valid key identifier. Fall back to
+                # trying every key against the unstripped value.
+                if self.verify_signature(value, sig):
+                    return value
+
+                raise BadSignature(
+                    f"Signature {sig!r} does not match", payload=key_value
+                )
+
         if self.verify_signature(value, sig):
             return value
 
         raise BadSignature(f"Signature {sig!r} does not match", payload=value)
+
+    def migrate(self, signed_value: str | bytes, **kwargs: t.Any) -> bytes:
+        """Unsign the given value, then sign it again with the current
+        (newest) key, including its key identifier if configured. This
+        can be used to migrate values signed without a key identifier,
+        or with an old key, to the current format.
+
+        Any extra keyword arguments are passed to :meth:`unsign`.
+
+        .. versionadded:: 2.3
+        """
+        return self.sign(self.unsign(signed_value, **kwargs))
 
     def validate(self, signed_value: str | bytes) -> bool:
         """Only validates the given signed value. Returns ``True`` if

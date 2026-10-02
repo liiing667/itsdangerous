@@ -113,3 +113,68 @@ class TestTimedSerializer(FreezeMixin, TestSerializer):
     def test_return_payload(self, serializer, value, ts):
         signed = serializer.dumps(value)
         assert serializer.loads(signed, return_timestamp=True) == (value, ts)
+
+
+class TestTimestampSignerKeyIds(FreezeMixin):
+    @pytest.fixture()
+    def signer(self):
+        return TimestampSigner(["old-key", "new-key"], key_ids=["1", "2"])
+
+    def test_sign_includes_key_id(self, signer):
+        signed = signer.sign("value")
+        assert signed.rsplit(b".", 2)[1] == b"2"
+        assert signer.unsign(signed) == b"value"
+
+    def test_max_age(self, signer, ts, freeze):
+        signed = signer.sign("value")
+        freeze.tick()
+        assert signer.unsign(signed, max_age=10) == b"value"
+        freeze.tick(timedelta(seconds=10))
+
+        with pytest.raises(SignatureExpired):
+            signer.unsign(signed, max_age=10)
+
+    def test_legacy_value_fallback(self, signer, ts):
+        legacy = TimestampSigner("new-key")
+        signed = legacy.sign("value")
+        assert signer.unsign(signed, return_timestamp=True) == (b"value", ts)
+
+    def test_bad_signature_payload(self, signer):
+        signed = signer.sign("my string").replace(b"my", b"other", 1)
+
+        with pytest.raises(BadTimeSignature) as exc_info:
+            signer.unsign(signed)
+
+        assert exc_info.value.payload == b"other string"
+
+    def test_migrate(self, signer, ts):
+        legacy = TimestampSigner("old-key")
+        old_signed = legacy.sign("value")
+        new_signed = signer.migrate(old_signed)
+        assert new_signed.rsplit(b".", 2)[1] == b"2"
+        assert signer.unsign(new_signed, return_timestamp=True) == (b"value", ts)
+
+
+class TestTimedSerializerKeyIds(FreezeMixin):
+    @pytest.fixture()
+    def serializer(self):
+        return TimedSerializer(
+            ["old-key", "new-key"], signer_kwargs={"key_ids": ["1", "2"]}
+        )
+
+    def test_dumps_includes_key_id(self, serializer, ts):
+        signed = serializer.dumps({"id": 42})
+        assert signed.rsplit(".", 2)[1] == "2"
+        assert serializer.loads(signed, return_timestamp=True) == ({"id": 42}, ts)
+
+    def test_migrate(self, serializer, ts, freeze):
+        legacy = TimedSerializer("old-key")
+        old_signed = legacy.dumps({"id": 42})
+        freeze.tick()
+        new_signed = serializer.migrate(old_signed, max_age=10)
+        assert new_signed.rsplit(".", 2)[1] == "2"
+        # Migrating re-signs with the current timestamp.
+        assert serializer.loads(new_signed, return_timestamp=True) == (
+            {"id": 42},
+            ts + timedelta(seconds=1),
+        )

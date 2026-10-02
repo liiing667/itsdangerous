@@ -194,3 +194,48 @@ def test_digests():
         "[42].MKCz_0nXQqv7wKpfHZcRtJRmpT2T5uvs9YQsJEhJimqxc"
         "9bCLxG31QzS5uC8OVBI1i6jyOLAFNoKaF5ckO9L5Q"
     )
+
+
+class TestKeyIds:
+    @pytest.fixture()
+    def serializer_factory(self):
+        return partial(
+            Serializer,
+            secret_key=["old-key", "new-key"],
+            signer_kwargs={"key_ids": ["1", "2"]},
+        )
+
+    @pytest.fixture()
+    def serializer(self, serializer_factory):
+        return serializer_factory()
+
+    def test_dumps_includes_key_id(self, serializer):
+        signed = serializer.dumps({"id": 42})
+        assert signed.rsplit(".", 2)[1] == "2"
+        assert serializer.loads(signed) == {"id": 42}
+
+    def test_legacy_value_fallback(self, serializer):
+        legacy = Serializer(["old-key", "new-key"])
+        signed = legacy.dumps({"id": 42})
+        assert serializer.loads(signed) == {"id": 42}
+
+    def test_wrong_key_id(self, serializer):
+        signed = serializer.dumps({"id": 42}).replace(".2.", ".1.")
+
+        with pytest.raises(BadSignature):
+            serializer.loads(signed)
+
+    def test_migrate(self, serializer):
+        legacy = Serializer("old-key")
+        old_signed = legacy.dumps({"id": 42})
+        new_signed = serializer.migrate(old_signed)
+        assert new_signed.rsplit(".", 2)[1] == "2"
+        assert serializer.loads(new_signed) == {"id": 42}
+
+    def test_migrate_preserves_salt(self, serializer):
+        old_signed = Serializer("old-key", salt="other").dumps({"id": 42})
+        new_signed = serializer.migrate(old_signed, salt="other")
+        assert serializer.loads(new_signed, salt="other") == {"id": 42}
+
+        with pytest.raises(BadSignature):
+            serializer.loads(new_signed)

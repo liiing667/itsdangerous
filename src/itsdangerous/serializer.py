@@ -342,6 +342,21 @@ class Serializer(t.Generic[_TSerialized]):
 
         raise t.cast(BadSignature, last_exception)
 
+    def migrate(
+        self, s: str | bytes, salt: str | bytes | None = None, **kwargs: t.Any
+    ) -> _TSerialized:
+        """Load the given signed value, then dump it again, re-signed
+        with the current (newest) key, including its key identifier if
+        the signer is configured with ``key_ids``. This can be used to
+        migrate values signed without a key identifier, or with an old
+        key, to the current format.
+
+        Any extra keyword arguments are passed to :meth:`loads`.
+
+        .. versionadded:: 2.3
+        """
+        return self.dumps(self.loads(s, salt=salt, **kwargs), salt=salt)
+
     def load(self, f: t.IO[t.Any], salt: str | bytes | None = None) -> t.Any:
         """Like :meth:`loads` but loads from a file."""
         return self.loads(f.read(), salt)
