@@ -8,6 +8,8 @@ from .exc import BadSignature as BadSignature
 from .exc import BadTimeSignature as BadTimeSignature
 from .exc import SignatureExpired as SignatureExpired
 from .serializer import Serializer as Serializer
+from .serializer import VerifyResult as VerifyResult
+from .serializer import VerifyStatus as VerifyStatus
 from .signer import HMACAlgorithm as HMACAlgorithm
 from .signer import NoneAlgorithm as NoneAlgorithm
 from .signer import Signer as Signer

@@ -16,6 +16,8 @@ from .exc import BadTimeSignature
 from .exc import SignatureExpired
 from .serializer import _TSerialized
 from .serializer import Serializer
+from .serializer import VerifyResult
+from .serializer import VerifyStatus
 from .signer import Signer
 
 
@@ -226,3 +228,35 @@ class TimedSerializer(Serializer[_TSerialized]):
         salt: str | bytes | None = None,
     ) -> tuple[bool, t.Any]:
         return self._loads_unsafe_impl(s, salt, load_kwargs={"max_age": max_age})
+
+    def verify(  # type: ignore[override]
+        self,
+        s: str | bytes,
+        max_age: int | None = None,
+        salt: str | bytes | None = None,
+    ) -> VerifyResult:
+        """Like :meth:`Serializer.verify` but also applies the
+        ``max_age`` semantics of :meth:`loads`. If the signature is
+        valid but older than ``max_age`` seconds, the result has
+        :attr:`~itsdangerous.serializer.VerifyStatus.EXPIRED` status
+        and a ``None`` payload. The data serializer is never invoked.
+
+        .. versionadded:: 2.3.0
+        """
+        s = want_bytes(s)
+
+        for signer in self.iter_unsigners(salt):
+            try:
+                return VerifyResult(
+                    VerifyStatus.VALID, signer.unsign(s, max_age=max_age)
+                )
+            except SignatureExpired:
+                # The signature was unsigned successfully but was
+                # expired. Do not try the next signer.
+                return VerifyResult(VerifyStatus.EXPIRED, None)
+            except BadTimeSignature:
+                return VerifyResult(VerifyStatus.BAD_TIME_SIGNATURE, None)
+            except BadSignature:
+                continue
+
+        return VerifyResult(VerifyStatus.BAD_SIGNATURE, None)

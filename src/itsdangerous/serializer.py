@@ -3,10 +3,14 @@ from __future__ import annotations
 import collections.abc as cabc
 import json
 import typing as t
+from enum import Enum
+from typing import NamedTuple
 
 from .encoding import want_bytes
 from .exc import BadPayload
 from .exc import BadSignature
+from .exc import BadTimeSignature
+from .exc import SignatureExpired
 from .signer import _make_keys_list
 from .signer import Signer
 
@@ -19,6 +23,44 @@ if t.TYPE_CHECKING:
 else:
     # Still available at runtime on Python < 3.13, but without the default.
     _TSerialized = t.TypeVar("_TSerialized", bound=str | bytes)
+
+
+class VerifyStatus(Enum):
+    """The category of a :class:`VerifyResult` returned by
+    :meth:`Serializer.verify`.
+
+    .. versionadded:: 2.3.0
+    """
+
+    #: The signature was valid and the raw payload is available.
+    VALID = "valid"
+    #: The signature did not match, or the signed value was malformed.
+    BAD_SIGNATURE = "bad_signature"
+    #: A timestamp was missing or malformed.
+    BAD_TIME_SIGNATURE = "bad_time_signature"
+    #: The signature was valid, but the timestamp was older than
+    #: ``max_age``.
+    EXPIRED = "expired"
+
+
+class VerifyResult(NamedTuple):
+    """The result of :meth:`Serializer.verify`. The configured data
+    serializer is never invoked, so ``payload`` is always the raw,
+    unsigned payload bytes rather than a deserialized object.
+
+    .. versionadded:: 2.3.0
+    """
+
+    #: Why verification succeeded or failed.
+    status: VerifyStatus
+    #: The raw unsigned payload bytes when :attr:`status` is
+    #: :attr:`VerifyStatus.VALID`, otherwise ``None``.
+    payload: bytes | None
+
+    @property
+    def valid(self) -> bool:
+        """Whether the signature was verified successfully."""
+        return self.status is VerifyStatus.VALID
 
 
 class _PDataSerializer(t.Protocol[_TSerialized]):
@@ -345,6 +387,37 @@ class Serializer(t.Generic[_TSerialized]):
     def load(self, f: t.IO[t.Any], salt: str | bytes | None = None) -> t.Any:
         """Like :meth:`loads` but loads from a file."""
         return self.loads(f.read(), salt)
+
+    def verify(self, s: str | bytes, salt: str | bytes | None = None) -> VerifyResult:
+        """Verify the signature without invoking the configured data
+        serializer. This goes through the same signers, secret keys,
+        and ``salt`` as :meth:`loads`, but only returns the raw,
+        unsigned payload bytes. It is safe to use with a data
+        serializer whose ``loads`` is exploitable, such as
+        :mod:`pickle`, because that serializer is never called.
+
+        This never raises. Check
+        :attr:`VerifyResult.status` to see why verification failed.
+        Subclasses may add additional statuses, such as
+        :attr:`VerifyStatus.EXPIRED` for :class:`.TimedSerializer`.
+
+        .. versionadded:: 2.3.0
+        """
+        s = want_bytes(s)
+
+        for signer in self.iter_unsigners(salt):
+            try:
+                return VerifyResult(VerifyStatus.VALID, signer.unsign(s))
+            except SignatureExpired:
+                # The signature was unsigned successfully but was
+                # expired. Do not try the next signer.
+                return VerifyResult(VerifyStatus.EXPIRED, None)
+            except BadTimeSignature:
+                return VerifyResult(VerifyStatus.BAD_TIME_SIGNATURE, None)
+            except BadSignature:
+                continue
+
+        return VerifyResult(VerifyStatus.BAD_SIGNATURE, None)
 
     def loads_unsafe(
         self, s: str | bytes, salt: str | bytes | None = None

@@ -73,6 +73,39 @@ wrong you can also use :meth:`~Serializer.loads_unsafe`:
 The first item in the returned tuple is a boolean that indicates if the
 signature was correct.
 
+Verifying Without Deserializing
+-------------------------------
+
+Both :meth:`~Serializer.loads` and :meth:`~Serializer.loads_unsafe`
+call the configured data serializer. If that serializer can execute
+code while loading, such as :mod:`pickle`, an untrusted payload is
+dangerous even for inspection.
+
+Use :meth:`~Serializer.verify` to check the signature only. It reuses
+the same secret keys, salt, and fallback signers as
+:meth:`~Serializer.loads`, never invokes the data serializer, and
+returns a :class:`~itsdangerous.serializer.VerifyResult` with an
+explicit :class:`~itsdangerous.serializer.VerifyStatus` and the raw
+payload bytes:
+
+.. code-block:: python
+
+    from itsdangerous import VerifyStatus
+
+    result = s.verify(data)
+
+    if result.status is VerifyStatus.VALID:
+        # result.payload is the raw, unsigned payload bytes.
+        raw_payload = result.payload
+    else:
+        # The signature was not valid; result.payload is None.
+        ...
+
+:meth:`~itsdangerous.timed.TimedSerializer.verify` accepts the same
+``max_age`` argument as :meth:`~itsdangerous.timed.TimedSerializer.loads`
+and reports an expired signature with
+:attr:`~itsdangerous.serializer.VerifyStatus.EXPIRED`. It never raises.
+
 
 Fallback Signers
 ----------------

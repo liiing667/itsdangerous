@@ -5,6 +5,12 @@ Unreleased
 
 -   Drop support for Python 3.8 and 3.9.
 -   Remove previously deprecated code.
+-   Add ``Serializer.verify`` and ``TimedSerializer.verify`` to verify a
+    signature without invoking the configured data serializer. They return a
+    ``VerifyResult`` with a ``VerifyStatus`` category and the raw unsigned
+    payload bytes, so it is safe to use with an exploitable serializer such
+    as pickle. ``TimedSerializer.verify`` applies the same ``max_age``
+    semantics as ``loads``.
 
 
 Version 2.2.0
